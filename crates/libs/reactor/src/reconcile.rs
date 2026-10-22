@@ -3240,17 +3240,21 @@ impl Planner<'_, '_> {
             object,
             kind: declaration.kind,
         });
-        if !self
+        // A selection names one of the items, which a new element does not have yet: it is set once
+        // the relations below have added them (WinUI refuses a SelectedIndex past the last item).
+        let (selection, rest): (Vec<Property>, Vec<Property>) = self
             .retained
             .get(object)
             .unwrap()
             .properties
             .as_slice()
-            .is_empty()
-        {
+            .iter()
+            .cloned()
+            .partition(|property| property.id == PropertyId::SelectedIndex);
+        if !rest.is_empty() {
             self.mutations.push(Mutation::SetProperties {
                 object,
-                set: Rc::from(self.retained.get(object).unwrap().properties.as_slice()),
+                set: Rc::from(rest),
                 clear: Rc::from([]),
             });
         }
@@ -3270,6 +3274,13 @@ impl Planner<'_, '_> {
         }
         for contract in relation_contracts(declaration.kind) {
             self.mount_relation(object, declaration, contract)?;
+        }
+        if !selection.is_empty() {
+            self.mutations.push(Mutation::SetProperties {
+                object,
+                set: Rc::from(selection),
+                clear: Rc::from([]),
+            });
         }
         if let Some(height) = declaration.window_title_bar {
             self.mutations
@@ -3476,6 +3487,7 @@ impl Planner<'_, '_> {
             )?;
         }
         let properties = declaration.properties.as_slice();
+        let mut late_selection: Option<Rc<[Property]>> = None;
         if self.retained.get(object).unwrap().properties.as_slice() != properties {
             let previous = self.retained.get(object).unwrap().properties.clone();
             let set = properties
@@ -3490,9 +3502,23 @@ impl Planner<'_, '_> {
                 .filter(|property| !properties.iter().any(|current| current.id == property.id))
                 .map(|property| property.id)
                 .collect::<Rc<[_]>>();
+            // A selection names one of the items, which this update may only add below: it is set
+            // after them (WinUI refuses a SelectedIndex past the last item).
+            let (selection, set): (Vec<Property>, Vec<Property>) = set
+                .iter()
+                .cloned()
+                .partition(|property| property.id == PropertyId::SelectedIndex);
             self.retained.get_mut(object).properties = declaration.properties.clone();
-            self.mutations
-                .push(Mutation::SetProperties { object, set, clear });
+            if !set.is_empty() || !clear.is_empty() {
+                self.mutations.push(Mutation::SetProperties {
+                    object,
+                    set: Rc::from(set),
+                    clear,
+                });
+            }
+            if !selection.is_empty() {
+                late_selection = Some(Rc::from(selection));
+            }
         }
         let events = declaration.events.as_slice();
         if retained_events(&self.retained.get(object).unwrap().events) != events {
@@ -3519,6 +3545,13 @@ impl Planner<'_, '_> {
         self.reconcile_virtual_items(object, declaration)?;
         for contract in relation_contracts(declaration.kind) {
             self.reconcile_relation(object, declaration, contract)?;
+        }
+        if let Some(set) = late_selection {
+            self.mutations.push(Mutation::SetProperties {
+                object,
+                set,
+                clear: Rc::from([]),
+            });
         }
         Ok(object)
     }
