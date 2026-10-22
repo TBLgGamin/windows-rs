@@ -552,18 +552,23 @@ impl NativeContentDialogScheduler {
         }
     }
 
-    fn reset(&mut self) {
+    /// Forgets what is queued and marks every open dialog as closing, without telling anyone. Returns
+    /// the dialogs that are open: the caller hides them once it has let go of the scheduler, as
+    /// hiding raises a dialog's `Closed` event at once, and its handler reads the scheduler.
+    fn reset(&mut self) -> Vec<native::ContentDialog> {
+        let mut open = Vec::new();
         for state in self.dialogs.values_mut() {
             state.desired_open = false;
             state.loaded = None;
             if let Some(generation) = state.pending_generation {
                 state.suppress_generation = Some(generation);
-                _ = state.value.Hide();
+                open.push(state.value.clone());
             }
         }
         for root in &mut self.roots {
             root.schedule.queue.clear();
         }
+        open
     }
 }
 
@@ -1703,7 +1708,10 @@ impl Drop for WinUiAdapter {
             _ = retirement.timer.Stop();
         }
         self.retirements.clear();
-        self.event_queue.content_dialogs.borrow_mut().reset();
+        let open = self.event_queue.content_dialogs.borrow_mut().reset();
+        for dialog in open {
+            _ = dialog.Hide();
+        }
         self.event_queue.events.borrow_mut().clear();
         self.observations.clear();
         for target in self.menus.keys().copied().collect::<Vec<_>>() {
