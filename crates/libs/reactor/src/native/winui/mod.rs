@@ -981,7 +981,15 @@ impl ShellPool<native::ContentControl> {
 
 impl RealizedShells {
     fn take(&self) -> Result<(RealizedContainer, native::UIElement), windows_core::Error> {
-        let (container, shell) = self.pool.borrow_mut().take(native::ContentControl::new)?;
+        // A shell stretches what it holds across its width, as a list's row does: a
+        // `ContentControl` left alone puts its content at the left, as wide as that wants.
+        let (container, shell) = self.pool.borrow_mut().take(|| {
+            let shell = native::ContentControl::new()?;
+            shell
+                .cast::<native::IControl>()?
+                .SetHorizontalContentAlignment(native::HorizontalAlignment::Stretch)?;
+            Ok(shell)
+        })?;
         Ok((container, shell.cast()?))
     }
 
